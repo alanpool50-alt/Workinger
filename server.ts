@@ -57,6 +57,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id INTEGER,
     title TEXT,
+    slug TEXT UNIQUE, 
     location TEXT, -- Descriptive location (e.g. "Erbil, Kurdistan")
     country_code TEXT,
     city_id INTEGER,
