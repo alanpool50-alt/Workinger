@@ -172,6 +172,48 @@ async function startServer() {
   });
 
   app.post("/api/jobs", (req, res) => {
+  const { 
+    company_id, title, location, type, salary, 
+    description, requirements, translations,
+    country_code, city_id, latitude, longitude,
+    company_name // Ensure the frontend sends the company name for the slug
+  } = req.body;
+
+  // 1. Generate the SEO-friendly slug
+  // We use title, company, and location to make it unique and descriptive
+  const slug = generateSlug(title, company_name || "Company", location);
+
+  try {
+    const result = db.prepare(`
+      INSERT INTO jobs (
+        company_id, title, slug, location, type, salary, 
+        description, requirements, translations, 
+        country_code, city_id, latitude, longitude
+      ) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      company_id || 1, 
+      title, 
+      slug, 
+      location, 
+      type, 
+      salary, 
+      description, 
+      requirements, 
+      translations, 
+      country_code, 
+      city_id, 
+      latitude, 
+      longitude
+    );
+    
+    // Return both the ID and the new Slug to the frontend
+    res.json({ id: result.lastInsertRowid, slug: slug });
+  } catch (error) {
+    console.error("Error inserting job:", error);
+    res.status(500).json({ error: "Failed to create job. Slug might already exist." });
+  }
+});.post("/api/jobs", (req, res) => {
     const { 
       company_id, title, location, type, salary, 
       description, requirements, translations,
