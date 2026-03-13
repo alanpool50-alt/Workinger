@@ -7,6 +7,28 @@ import dotenv from "dotenv";
 dotenv.config();
 const db = new Database(process.env.DATABASE_URL || "database.sqlite");
 
+// --- Helper Functions (Defined first so they can be used below) ---
+function generateSlug(title: string, company: string, city: string): string {
+  const base = `${title}-${city}-${company}`;
+  return base
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '') // Remove special characters
+    .replace(/[\s_-]+/g, '-')  // Replace spaces and underscores with a single hyphen
+    .replace(/^-+|-+$/g, '');  // Remove leading/trailing hyphens
+}
+
+const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; 
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+};
+
 // --- 1. Initialize Enhanced Database Schema ---
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -58,7 +80,7 @@ db.exec(`
     company_id INTEGER,
     title TEXT,
     slug TEXT UNIQUE, 
-    location TEXT, -- Descriptive location (e.g. "Erbil, Kurdistan")
+    location TEXT,
     country_code TEXT,
     city_id INTEGER,
     latitude REAL,
@@ -85,29 +107,16 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_cities_name ON cities(name);
   CREATE INDEX IF NOT EXISTS idx_jobs_coords ON jobs(latitude, longitude);
+  CREATE INDEX IF NOT EXISTS idx_jobs_slug ON jobs(slug);
 `);
-
-// --- 2. Geospatial Logic (Haversine Formula) ---
-// Returns distance in km
-const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371; 
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-};
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
   app.use(express.json());
 
-  // --- 3. Location & Search APIs ---
+  // --- 2. Location & Search APIs ---
 
-  // Global City Autocomplete
   app.get("/api/locations/cities", (req, res) => {
     const { q } = req.query;
     if (!q || String(q).length < 2) return res.json([]);
@@ -121,13 +130,11 @@ async function startServer() {
     res.json(matches);
   });
 
-  // Get All Countries (for settings selector)
   app.get("/api/locations/countries", (req, res) => {
     const countries = db.prepare("SELECT * FROM countries ORDER BY country_name ASC").all();
     res.json(countries);
   });
 
-  // Jobs Near You Feed
   app.get("/api/jobs/nearby", (req, res) => {
     const { lat, lon, radius = 50 } = req.query;
     const userLat = parseFloat(lat as string);
@@ -155,7 +162,7 @@ async function startServer() {
     res.json(nearbyJobs);
   });
 
-  // --- 4. Existing Job & Auth APIs (Updated) ---
+  // --- 3. Job & Auth APIs ---
 
   app.get("/api/jobs", (req, res) => {
     const { remote } = req.query;
@@ -172,60 +179,34 @@ async function startServer() {
   });
 
   app.post("/api/jobs", (req, res) => {
-  const { 
-    company_id, title, location, type, salary, 
-    description, requirements, translations,
-    country_code, city_id, latitude, longitude,
-    company_name // Ensure the frontend sends the company name for the slug
-  } = req.body;
-
-  // 1. Generate the SEO-friendly slug
-  // We use title, company, and location to make it unique and descriptive
-  const slug = generateSlug(title, company_name || "Company", location);
-
-  try {
-    const result = db.prepare(`
-      INSERT INTO jobs (
-        company_id, title, slug, location, type, salary, 
-        description, requirements, translations, 
-        country_code, city_id, latitude, longitude
-      ) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      company_id || 1, 
-      title, 
-      slug, 
-      location, 
-      type, 
-      salary, 
-      description, 
-      requirements, 
-      translations, 
-      country_code, 
-      city_id, 
-      latitude, 
-      longitude
-    );
-    
-    // Return both the ID and the new Slug to the frontend
-    res.json({ id: result.lastInsertRowid, slug: slug });
-  } catch (error) {
-    console.error("Error inserting job:", error);
-    res.status(500).json({ error: "Failed to create job. Slug might already exist." });
-  }
-});.post("/api/jobs", (req, res) => {
     const { 
       company_id, title, location, type, salary, 
       description, requirements, translations,
-      country_code, city_id, latitude, longitude 
+      country_code, city_id, latitude, longitude,
+      company_name 
     } = req.body;
 
-    const result = db.prepare(`
-      INSERT INTO jobs (company_id, title, location, type, salary, description, requirements, translations, country_code, city_id, latitude, longitude) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(company_id || 1, title, location, type, salary, description, requirements, translations, country_code, city_id, latitude, longitude);
-    
-    res.json({ id: result.lastInsertRowid });
+    const slug = generateSlug(title, company_name || "Company", location);
+
+    try {
+      const result = db.prepare(`
+        INSERT INTO jobs (
+          company_id, title, slug, location, type, salary, 
+          description, requirements, translations, 
+          country_code, city_id, latitude, longitude
+        ) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        company_id || 1, title, slug, location, type, salary, 
+        description, requirements, translations, 
+        country_code, city_id, latitude, longitude
+      );
+      
+      res.json({ id: result.lastInsertRowid, slug: slug });
+    } catch (error) {
+      console.error("Error inserting job:", error);
+      res.status(500).json({ error: "Failed to create job. Slug might already exist." });
+    }
   });
 
   app.post("/api/login", (req, res) => {
@@ -235,7 +216,7 @@ async function startServer() {
     else res.status(401).json({ error: "Invalid credentials" });
   });
 
-  // --- Admin APIs (Kept for your management dashboard) ---
+  // --- 4. Admin APIs ---
   app.get("/api/admin/tables", (req, res) => {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
     res.json(tables.map((t: any) => t.name));
@@ -249,7 +230,7 @@ async function startServer() {
     res.json({ data, columns });
   });
 
-  // Vite middleware
+  // Vite / Static Middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -268,13 +249,3 @@ async function startServer() {
 }
 
 startServer();
-function generateSlug(title: string, company: string, city: string): string {
-  const base = `${title}-${city}-${company}`;
-  
-  return base
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '') // Remove special characters
-    .replace(/[\s_-]+/g, '-')  // Replace spaces and underscores with a single hyphen
-    .replace(/^-+|-+$/g, '');  // Remove leading/trailing hyphens
-}
