@@ -225,3 +225,13 @@ async function startServer() {
 }
 
 startServer();
+function generateSlug(title: string, company: string, city: string): string {
+  const base = `${title}-${city}-${company}`;
+  
+  return base
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '') // Remove special characters
+    .replace(/[\s_-]+/g, '-')  // Replace spaces and underscores with a single hyphen
+    .replace(/^-+|-+$/g, '');  // Remove leading/trailing hyphens
+}
